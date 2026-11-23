@@ -1,0 +1,38 @@
+# ---- Secrets / credentials (NEVER commit) ----
+.env
+.env.*
+*.pem
+*.key
+.aws/
+credentials
+config
+secrets.json
+*.tfvars
+*.tfstate
+*.tfstate.*
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# ---- Data (raw downloads, don't bloat the repo) ----
+data/
+*.csv
+*.xml
+*.gz
+*.db
+*.sqlite
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
