@@ -1,6 +1,6 @@
 # AirBreda — Architecture Design Document
 
-**Author:** _your name_
+**Author:** Yuliia Medun
 **Course:** System Design & Cloud Platforms, Year 3 ADSAI
 **Cloud provider:** AWS (`eu-north-1`)
 
@@ -18,21 +18,51 @@ them, and serves an ML model predicting NO₂ exceedance risk in the next hour.
 
 ## 2. Architecture diagram
 
-_Replace with your diagram. Mermaid renders on GitHub but not on GitHub Pages without
-a plugin — export a PNG into `docs/images/` and embed it, or keep the Mermaid block
-for the GitHub view._
-
 ```mermaid
 flowchart LR
-    LMN[Luchtmeetnet API<br/>NO2, hourly] --> IA[ingest_air.py]
-    NDW[NDW Open Data<br/>DATEX II XML, 1 min] --> IT[ingest_traffic.py]
-    IA --> S3[(S3 bucket<br/>raw files)]
-    IT --> S3
-    IA --> RDS[(RDS PostgreSQL<br/>sensor_readings)]
-    IT --> RDS
-    RDS --> API[API + dashboard<br/>GET /site/id, GET /]
-    RDS --> ML[Regression model]
-    ML --> API
+    subgraph sources["Data sources"]
+        LMN["RIVM Luchtmeetnet API<br/>station NL10240<br/>JSON · hourly NO2"]
+        NDW["NDW Open Data<br/>4 sites on A27 (hm 63)<br/>gzipped DATEX II XML · per minute"]
+    end
+
+    subgraph ingest["Ingestion (containerised)"]
+        IA["ingest_air.py<br/>fetch · filter NO2 · upsert"]
+        IT["ingest_traffic.py<br/>decode index map · extract 4 sites"]
+    end
+
+    subgraph storage["Storage · AWS eu-north-1"]
+        RDS[("RDS PostgreSQL<br/>db.t4g.micro<br/>sensor_readings")]
+        S3[("S3 bucket<br/>ndw/YYYY-MM-DD/HH-site.csv")]
+    end
+
+    subgraph planned["Planned — Day 4"]
+        ML["Regression model<br/>NO2 exceedance risk"]
+        API["Dashboard + JSON API<br/>GET / · GET /site/id · GET /health"]
+    end
+
+    LMN --> IA
+    NDW --> IT
+    IA -->|"INSERT ... ON CONFLICT<br/>DO NOTHING"| RDS
+    IT -->|"upload_file"| S3
+    RDS -.-> ML
+    S3 -.->|"re-parse for retraining"| ML
+    ML -.-> API
+    RDS -.-> API
+
+    classDef src fill:#e8f0fe,stroke:#3b6fd4,color:#11243e
+    classDef ing fill:#fff4e5,stroke:#d98324,color:#3d2607
+    classDef sto fill:#e9f6ec,stroke:#2f8f4e,color:#0f2e1b
+    classDef fut fill:#f3f0f7,stroke:#8b7bb8,color:#2b2340,stroke-dasharray:4 3
+
+    class LMN,NDW src
+    class IA,IT ing
+    class RDS,S3 sto
+    class ML,API fut
+
+    style sources fill:#fafafa,stroke:#cfcfcf,color:#555
+    style ingest fill:#fafafa,stroke:#cfcfcf,color:#555
+    style storage fill:#fafafa,stroke:#cfcfcf,color:#555
+    style planned fill:#fafafa,stroke:#cfcfcf,color:#555,stroke-dasharray:5 4
 ```
 
 ---

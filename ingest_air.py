@@ -2,12 +2,15 @@
 
 import requests
 import pandas as pd
+import os
+import psycopg2
+from dotenv import load_dotenv
 
 # DESIGN NOTES
 # CAP trade-off: the Luchtmeetnet sensor network prefers AVAILABILITY over consistency.
 # The API answers immediately with whatever RIVM has validated so far, so readings run around 1 hour behind real time and an offline station is just absent from a HTTP 200 response. 
 # A consistency-first design would withhold everything until all stations reported, which  is more correct, but a municipal dashboard would go blank for hours. 
-# For this purpose, late data is more useful than no data, so I chose AP here.
+# For this purpose, late data is more useful than no data, that's why AP was chosen here.
 
 # Null / missing values in production: I keep three states distinguishable: no row (never polled), row with NULL value (sensor reported nothing), and row with a real value. 
 # Store nulls, never drop the row and never substitute 0.
@@ -55,13 +58,60 @@ def get_latest_no2(df: pd.DataFrame) -> pd.Series | None:
     return no2.sort_values("timestamp_measured", ascending=False).iloc[0]
 
 
+load_dotenv()
+
+INSERT_SQL = """
+INSERT INTO sensor_readings (station_id, timestamp, component, value)
+VALUES (%s, %s, %s, %s)
+ON CONFLICT (station_id, timestamp, component) DO NOTHING;
+"""
+
+
+def write_readings(df: pd.DataFrame, station: str = STATION) -> int:
+    """Insert readings into the database. Returns rows actually inserted."""
+    if df.empty:
+        return 0
+
+    rows = [
+        (
+            station,
+            r.timestamp_measured,
+            r.formula,
+            None if pd.isna(r.value) else float(r.value),
+        )
+        for r in df.itertuples()
+    ]
+
+    conn = psycopg2.connect(
+        host=os.environ["DB_HOST"],
+        port=os.environ["DB_PORT"],
+        dbname=os.environ["DB_NAME"],
+        user=os.environ["DB_USER"],
+        password=os.environ["DB_PASSWORD"],
+        sslmode="require",
+        connect_timeout=10,
+    )
+    try:
+        with conn, conn.cursor() as cur:
+            cur.executemany(INSERT_SQL, rows)
+            return cur.rowcount
+    finally:
+        conn.close()
+
+
 if __name__ == "__main__":
     records = fetch_measurements()
 
     if not records:
         print("No data retrieved — check the error above.")
     else:
-        latest = get_latest_no2(pd.DataFrame(records))
+        df = pd.DataFrame(records)
+        no2 = filter_no2_readings(df)
+
+        inserted = write_readings(no2)
+        print(f"Inserted {inserted} new rows.")
+
+        latest = get_latest_no2(df)
         if latest is None:
             print(f"No NO2 readings available for station {STATION}.")
         elif pd.isna(latest["value"]):
