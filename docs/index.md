@@ -18,6 +18,8 @@ them, and serves an ML model predicting NO₂ exceedance risk in the next hour.
 
 ## 2. Architecture diagram
 
+## 2. Architecture diagram
+
 ```mermaid
 flowchart LR
     subgraph sources["Data sources"]
@@ -25,9 +27,10 @@ flowchart LR
         NDW["NDW Open Data<br/>4 sites on A27 (hm 63)<br/>gzipped DATEX II XML · per minute"]
     end
 
-    subgraph ingest["Ingestion (containerised)"]
-        IA["ingest_air.py<br/>fetch · filter NO2 · upsert"]
-        IT["ingest_traffic.py<br/>decode index map · extract 4 sites"]
+    subgraph ingest["EC2 VM · t3.micro · cron every hour"]
+        IA["air container<br/>ingest_air.py<br/>fetch · filter NO2 · flag · insert"]
+        IT["traffic container<br/>ingest_traffic.py<br/>decode index map · extract 4 sites"]
+        IAM["IAM role<br/>airbreda-vm-role"]
     end
 
     subgraph storage["Storage · AWS eu-north-1"]
@@ -42,8 +45,9 @@ flowchart LR
 
     LMN --> IA
     NDW --> IT
-    IA -->|"INSERT ... ON CONFLICT<br/>DO NOTHING"| RDS
-    IT -->|"upload_file"| S3
+    IA -->|"INSERT ... ON CONFLICT DO NOTHING<br/>port 5432 · security group rule"| RDS
+    IT -->|"HTTPS upload"| S3
+    IAM -.->|"S3 access, no stored keys"| IT
     RDS -.-> ML
     S3 -.->|"re-parse for retraining"| ML
     ML -.-> API
@@ -55,7 +59,7 @@ flowchart LR
     classDef fut fill:#f3f0f7,stroke:#8b7bb8,color:#2b2340,stroke-dasharray:4 3
 
     class LMN,NDW src
-    class IA,IT ing
+    class IA,IT,IAM ing
     class RDS,S3 sto
     class ML,API fut
 
