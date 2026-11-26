@@ -18,11 +18,16 @@ Parsing helpers reused from getTrafficReadings.py, provided by the course
 
 import csv
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+import time
+from health import start_health_server
 
 import boto3
 from dotenv import load_dotenv
+
+import logging
+from log_utils import log_event
 
 from getTrafficReadings import (
     CONFIG_URL,
@@ -68,16 +73,45 @@ if __name__ == "__main__":
     bucket = os.environ["S3_BUCKET"]
     s3 = boto3.client("s3")
 
-    config_bytes = download_and_decompress(CONFIG_URL).read()
-    measured_bytes = download_and_decompress(MEASURED_URL).read()
+    state = {"source": "NDW", "last_successful_fetch": None, "bad_data_count": 0}
+    if os.environ.get("HEALTH_PORT"):
+        start_health_server(state, int(os.environ["HEALTH_PORT"]))
+
+    try:
+        config_bytes = download_and_decompress(CONFIG_URL).read()
+        measured_bytes = download_and_decompress(MEASURED_URL).read()
+    except Exception as exc:
+        log_event(logging.ERROR, "fetch_failed", source="NDW", error=str(exc))
+        raise SystemExit(1)
+
+    ndw_bad_data_count = 0
 
     for label, site_id in SITES.items():
-        summary = report_site(config_bytes, measured_bytes, site_id)
+        try:
+            summary = report_site(config_bytes, measured_bytes, site_id)
 
-        if summary["timestamp"] is None:
-            print(f"No readings for {label}, skipping.")
-            continue
+            if summary["bad_speed_count"]:
+                ndw_bad_data_count += summary["bad_speed_count"]
+                log_event(logging.WARNING, "DATA_QUALITY_ERROR", source="NDW",
+                        location=site_id, field="speed", value=-1,
+                        count=summary["bad_speed_count"])
 
-        key, path = save_csv(label, summary)
-        s3.upload_file(str(path), bucket, key)
-        print(f"Uploaded s3://{bucket}/{key}")
+            if summary["timestamp"] is None:
+                log_event(logging.WARNING, "no_readings", source="NDW", site=label)
+                continue
+
+            key, path = save_csv(label, summary)
+            s3.upload_file(str(path), bucket, key)
+            log_event(logging.INFO, "fetch_success", source="NDW", site=label,
+                      timestamp=summary["timestamp"], total_flow=summary["total_flow"])
+            log_event(logging.INFO, "s3_upload", key=key)
+            state["last_successful_fetch"] = datetime.now(timezone.utc).isoformat()
+        except Exception as exc:
+            log_event(logging.ERROR, "site_failed", source="NDW", site=label, error=str(exc))
+
+    state["bad_data_count"] = ndw_bad_data_count
+    if ndw_bad_data_count > 10:
+        log_event(logging.ERROR, "BAD_DATA_THRESHOLD_EXCEEDED", source="NDW", count=ndw_bad_data_count)
+
+    if os.environ.get("HEALTH_PORT"):
+        time.sleep(60)  # keep alive so /health can be checked

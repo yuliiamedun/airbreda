@@ -5,6 +5,11 @@ import pandas as pd
 import os
 import psycopg2
 from dotenv import load_dotenv
+import logging
+from log_utils import log_event
+import time
+from datetime import datetime, timezone
+from health import start_health_server
 
 # DESIGN NOTES
 # CAP trade-off: the Luchtmeetnet sensor network prefers AVAILABILITY over consistency.
@@ -20,6 +25,14 @@ from dotenv import load_dotenv
 STATION = "NL10240"
 API_URL = f"https://api.luchtmeetnet.nl/open_api/stations/{STATION}/measurements"
 
+load_dotenv()
+
+INSERT_SQL = """
+INSERT INTO sensor_readings (station_id, timestamp, component, value, is_flagged)
+VALUES (%s, %s, %s, %s, %s)
+ON CONFLICT (station_id, timestamp, component) DO NOTHING;
+"""
+
 
 def fetch_measurements(station: str = STATION, pages: int = 1) -> list[dict]:
     """Fetch raw measurement records, newest first. Returns [] on failure."""
@@ -34,13 +47,13 @@ def fetch_measurements(station: str = STATION, pages: int = 1) -> list[dict]:
         response = requests.get(url, params=params, timeout=10)
         response.raise_for_status()
     except requests.Timeout:
-        print(f"ERROR: request to {station} timed out after 10s")
+        log_event(logging.ERROR, "fetch_failed", source="Luchtmeetnet", reason="timeout")
         return []
     except requests.ConnectionError:
-        print(f"ERROR: could not connect to Luchtmeetnet")
+        log_event(logging.ERROR, "fetch_failed", source="Luchtmeetnet", reason="connection")
         return []
     except requests.HTTPError as exc:
-        print(f"ERROR: API returned {exc.response.status_code}")
+        log_event(logging.ERROR, "fetch_failed", source="Luchtmeetnet", reason=f"http_{exc.response.status_code}")
         return []
 
     return response.json().get("data", [])
@@ -50,21 +63,25 @@ def filter_no2_readings(df: pd.DataFrame) -> pd.DataFrame:
     """Keep only NO2 rows. Null values are preserved, not dropped."""
     return df[df["formula"] == "NO2"].copy()
 
+def flag_data_quality(df: pd.DataFrame) -> pd.DataFrame:
+    """Flag null values and runs of 3+ identical hourly values."""
+    df = df.sort_values("timestamp_measured").copy()
+    is_null = df["value"].isna()
+    run_id = (df["value"] != df["value"].shift()).cumsum()
+    run_len = df.groupby(run_id)["value"].transform("size")
+    is_stale = (run_len >= 3) & ~is_null
+    df["is_flagged"] = is_null | is_stale
+    df["flag_reason"] = None
+    df.loc[is_null, "flag_reason"] = "null"
+    df.loc[is_stale, "flag_reason"] = "stale"
+    return df
+
 def get_latest_no2(df: pd.DataFrame) -> pd.Series | None:
     """Return the newest NO2 row, or None if there are none."""
     no2 = filter_no2_readings(df)
     if no2.empty:
         return None
     return no2.sort_values("timestamp_measured", ascending=False).iloc[0]
-
-
-load_dotenv()
-
-INSERT_SQL = """
-INSERT INTO sensor_readings (station_id, timestamp, component, value)
-VALUES (%s, %s, %s, %s)
-ON CONFLICT (station_id, timestamp, component) DO NOTHING;
-"""
 
 
 def write_readings(df: pd.DataFrame, station: str = STATION) -> int:
@@ -78,6 +95,7 @@ def write_readings(df: pd.DataFrame, station: str = STATION) -> int:
             r.timestamp_measured,
             r.formula,
             None if pd.isna(r.value) else float(r.value),
+            bool(r.is_flagged),
         )
         for r in df.itertuples()
     ]
@@ -100,25 +118,46 @@ def write_readings(df: pd.DataFrame, station: str = STATION) -> int:
 
 
 if __name__ == "__main__":
+    state = {"source": "Luchtmeetnet", "last_successful_fetch": None, "bad_data_count": 0}
+    if os.environ.get("HEALTH_PORT"):
+        start_health_server(state, int(os.environ["HEALTH_PORT"]))
+
     records = fetch_measurements()
 
     if not records:
-        print("No data retrieved — check the error above.")
+        log_event(logging.ERROR, "no_data", source="Luchtmeetnet", station_id=STATION)
     else:
         df = pd.DataFrame(records)
-        no2 = filter_no2_readings(df)
+        no2 = flag_data_quality(filter_no2_readings(df))
 
-        inserted = write_readings(no2)
-        print(f"Inserted {inserted} new rows.")
+        luchtmeetnet_bad_data_count = 0
+        for r in no2[no2["is_flagged"]].itertuples():
+            luchtmeetnet_bad_data_count += 1
+            log_event(logging.WARNING, "DATA_QUALITY_ERROR", source="Luchtmeetnet",
+                      station_id=STATION, field="NO2", reason=r.flag_reason,
+                      value=None if pd.isna(r.value) else float(r.value))
+        log_event(logging.INFO, "fetch_success", source="Luchtmeetnet",
+                  station_id=STATION, rows=len(no2))
+        
+        state["last_successful_fetch"] = datetime.now(timezone.utc).isoformat()
+        state["bad_data_count"] = luchtmeetnet_bad_data_count
+
+        if luchtmeetnet_bad_data_count > 10:
+            log_event(logging.ERROR, "BAD_DATA_THRESHOLD_EXCEEDED", source="Luchtmeetnet", count=luchtmeetnet_bad_data_count)
+
+        try:
+            inserted = write_readings(no2)
+            log_event(logging.INFO, "db_write", inserted=inserted)
+        except psycopg2.OperationalError as exc:
+            log_event(logging.ERROR, "db_write_failed", error=str(exc))
 
         latest = get_latest_no2(df)
         if latest is None:
-            print(f"No NO2 readings available for station {STATION}.")
-        elif pd.isna(latest["value"]):
-            print(f"Latest NO2 reading at {latest['timestamp_measured']} is NULL "
-                  f"(sensor reported no value).")
+            log_event(logging.WARNING, "no_no2_readings", station_id=STATION)
         else:
-            print(f"Station:   {STATION}")
-            print(f"Component: NO2")
-            print(f"Value:     {latest['value']} µg/m³")
-            print(f"Measured:  {latest['timestamp_measured']}")
+            value = None if pd.isna(latest["value"]) else float(latest["value"])
+            log_event(logging.INFO, "latest_no2", station_id=STATION,
+                      value=value, measured=latest["timestamp_measured"])
+
+    if os.environ.get("HEALTH_PORT"):
+        time.sleep(60)  # keep alive so /health can be checked

@@ -146,6 +146,7 @@ def report_site(config_bytes, measured_bytes, site_id):
     readings = extract_measurements(io.BytesIO(measured_bytes), site_id)
     flow_vals = [float(r["value"]) for r in readings if r["index"] in flow_idx]
     speed_vals = [float(r["value"]) for r in readings if r["index"] in speed_idx and float(r["value"]) > 0]
+    bad_speed_count = sum(1 for r in readings if r["index"] in speed_idx and float(r["value"]) == -1)
     ts = readings[0].get("timestamp") if readings else None
 
     avg_speed = sum(speed_vals) / len(speed_vals) if speed_vals else None
@@ -158,7 +159,8 @@ def report_site(config_bytes, measured_bytes, site_id):
     print(f"  timestamp        : {ts}")
     print()
 
-    return {"site_id": site_id, "total_flow": sum(flow_vals), "avg_speed": avg_speed, "timestamp": ts}
+    return {"site_id": site_id, "total_flow": sum(flow_vals), "avg_speed": avg_speed,
+            "timestamp": ts, "bad_speed_count": bad_speed_count}
 
 
 if __name__ == "__main__":
