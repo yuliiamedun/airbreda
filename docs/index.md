@@ -1,13 +1,31 @@
 # Architecture Design Document
 
-**Author:** Yuliia Medun
-**Course:** System Design & Cloud Platforms, Year 3 ADSAI
-**Cloud provider:** AWS (`eu-north-1`, Stockholm)
+**Author:** Yuliia Medun  
+**Course:** System Design & Cloud Platforms, Year 3 ADSAI  
+**Cloud provider:** AWS (`eu-north-1`, Stockholm)  
 
 AirBreda is a small cloud platform for the Municipality of Breda that collects two live open-data streams every hour: NO₂ readings from RIVM Luchtmeetnet station NL10240, and vehicle counts from four NDW measurement sites at the A27 interchange near Breda. It stores both, trains a simple regression model that estimates the current hour's NO₂ from traffic and time of day, and serves the readings, the prediction and an exceedance risk on a public dashboard and JSON API.
 
 ---
 
+## Contents
+
+1. [Full AirBreda Architecture Diagram](#diagram)
+2. [Architecture Decision Records](#adrs)
+   - [ADR-001: Initial Data Storage Strategy](#adr-001)
+   - [ADR-002: Messaging Architecture](#adr-002)
+   - [ADR-003: Resilience Strategy](#adr-003)
+   - [ADR-004: Compute Strategy](#adr-004)
+   - [ADR-005: Compute & Deployment Strategy](#adr-005)
+   - [ADR-006: ML Serving Architecture](#adr-006)
+3. [Trade-Off Justifications](#tradeoffs)
+4. [Cloud Provider Rationale for a Municipal Audience](#cloud-provider)
+5. [Cost Estimate](#cost)
+6. [Reflection](#reflection)
+
+---
+
+<a id="diagram"></a>
 ## 1. Full AirBreda Architecture Diagram
 
 The system as deployed on Day 4, including which credentials give access to what (trust boundaries).
@@ -77,6 +95,7 @@ flowchart LR
 
 ---
 
+<a id="adrs"></a>
 ## 2. Architecture Decision Records
 
 | ADR | Topic |
@@ -118,6 +137,7 @@ flowchart LR
 
 ---
 
+<a id="tradeoffs"></a>
 ## 3. Trade-Off Justifications
 
 **Storage type (ADR-001).** I considered a NoSQL store such as DynamoDB and a relational database, and chose PostgreSQL on RDS for the NO₂ readings, with traffic files in S3. Every reading has the same four fields, the main query is a time range, and the core analysis joins NO₂ and traffic by hour, which a relational database does in one statement. The volume is small: about 130,000 rows a year for one station, and roughly 1–2 million rows after five years at ten stations, which the smallest RDS instance handles easily. A composite primary key (station, timestamp, component) with `ON CONFLICT DO NOTHING` makes repeated fetches harmless. I gave up schema flexibility and the near-unlimited scaling of NoSQL, neither of which AirBreda needs. I also gave up some raw data: the traffic script stores a parsed CSV per site rather than the original XML, so details like per-lane counts can't be recovered later.
@@ -130,6 +150,7 @@ flowchart LR
 
 ---
 
+<a id="cloud-provider"></a>
 ## 4. Cloud Provider Rationale for a Municipal Audience
 
 *Written for a policy officer at the Municipality of Breda.*
@@ -146,6 +167,7 @@ There is one point to weigh honestly. AWS is an American company. For this proje
 
 ---
 
+<a id="cost"></a>
 ## 5. Cost Estimate
 
 On-demand prices for region `eu-north-1` (Stockholm), 730 hours per month, converted at 1 USD = €0.86 (November 2026). Instance sizes are my own choices for each scale.
@@ -165,6 +187,7 @@ On-demand prices for region `eu-north-1` (Stockholm), 730 hours per month, conve
 
 ---
 
+<a id="reflection"></a>
 ## 6. Reflection
 
 The architectural decision I'm least confident in is running the whole system on one small VM. On Day 3 the traffic container was killed for lack of memory until I added a swap file, and on Day 4 free memory dropped to about 50 MB every time the hourly traffic job ran. Once, the dashboard restarted on its own, and I couldn't find out why: the kernel log showed no out-of-memory kill at that moment. I chose the VM because it was simple and cheap, but I can't fully explain how it behaves under load, which makes it hard to defend. To become confident, I would need several weeks of monitoring data: memory and CPU over time, how often the dashboard slows down or restarts, and whether those events line up with the cron runs. With that evidence I could decide whether a larger VM is enough or whether the dashboard needs its own resources.
