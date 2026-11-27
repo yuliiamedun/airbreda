@@ -5,7 +5,6 @@ Cloud platform for the System Design & Cloud Platforms elective (Year 3 ADSAI, B
 AirBreda ingests two live Dutch open-data streams every hour, stores them on AWS, trains a linear regression that estimates NO₂ from traffic and time of day, and serves the readings, the prediction and an exceedance risk for the A27 interchange near Breda on a dashboard and JSON API.
 
 - **Architecture Design Document:** https://yuliiamedun.github.io/airbreda/
-- **Live dashboard:** http://51.21.201.104:8000
 
 ## Data sources
 

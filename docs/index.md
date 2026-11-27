@@ -155,7 +155,7 @@ flowchart LR
 
 *Written for a policy officer at the Municipality of Breda.*
 
-AirBreda runs on Amazon Web Services (AWS), a company that provides rented computing power and storage. Instead of buying and maintaining its own servers, the municipality can rent what it needs and pay monthly. Currently, AirBreda uses one small server, one database and one storage service, costing [EDIT: monthly total].
+AirBreda runs on Amazon Web Services (AWS), a company that provides rented computing power and storage. Instead of buying and maintaining its own servers, the municipality can rent what it needs and pay monthly. Currently, AirBreda uses one small server, one database and one storage service, costing around €17 a month.
 
 What AWS offers. AWS provides ready-to-use services. It manages database backups and maintenance, stores files without us managing physical disks, and allows us to increase or decrease resources when needed. If AirBreda grows to cover more locations, we can simply rent more capacity instead of buying new hardware.
 
