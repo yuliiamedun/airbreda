@@ -5,12 +5,16 @@ import io
 import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import json
 
 import boto3
 import psycopg2
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+
+import logging
+from log_utils import log_event
 
 from predict import predict
 
@@ -75,8 +79,7 @@ def air_health() -> dict:
             last, bad = cur.fetchone()
     finally:
         conn.close()
-    return {"source": "Luchtmeetnet",
-            "last_successful_fetch": last.isoformat() if last else None,
+    return {"last_successful_fetch": last.isoformat() if last else None,
             "bad_data_count": bad}
 
 
@@ -86,9 +89,13 @@ def ndw_health() -> dict:
         for o in page.get("Contents", []):
             if last is None or o["LastModified"] > last:
                 last = o["LastModified"]
-    return {"source": "NDW",
-            "last_successful_fetch": last.isoformat() if last else None,
-            "bad_data_count": None}
+    try:
+        body = s3.get_object(Bucket=BUCKET, Key="health/ndw.json")["Body"].read()
+        bad = json.loads(body)["bad_data_count"]
+    except s3.exceptions.NoSuchKey:
+        bad = 0
+    return {"last_successful_fetch": last.isoformat() if last else None,
+            "bad_data_count": bad}
 
 
 @app.get("/site/{site_id}")
@@ -103,9 +110,14 @@ def site(site_id: str):
     if site_id not in SITES:
         raise HTTPException(status_code=404, detail="Unknown site")
 
-    no2 = latest_no2()
-    readings = {s: latest_traffic(s) for s in SITES}
+    try:
+        no2 = latest_no2()
+        readings = {s: latest_traffic(s) for s in SITES}
+    except Exception as exc:
+        log_event(logging.ERROR, "data_read_failed", site=site_id, error=str(exc))
+        raise HTTPException(status_code=503, detail="Data source unavailable")
     if no2 is None or any(r is None for r in readings.values()):
+        log_event(logging.WARNING, "no_data", site=site_id)
         raise HTTPException(status_code=503, detail="No data yet")
 
     intensity, ts = readings[site_id]
@@ -116,8 +128,12 @@ def site(site_id: str):
 
     try:
         pred = predict(total, hour)
-    except Exception:
+    except Exception as exc:
+        log_event(logging.ERROR, "predict_failed", site=site_id, error=str(exc))
         pred = {"no2_ug_m3_predicted": None, "no2_exceedance_risk": None}
+    else:
+        log_event(logging.INFO, "site_served", site=site_id,
+                  no2=no2, predicted=pred["no2_ug_m3_predicted"])
 
     return {
         "site_id": site_id,
@@ -128,15 +144,6 @@ def site(site_id: str):
         "timestamp": ts,
     }
 
-@app.get("/health")
-def health():
-    sources = []
-    for fn, name in ((air_health, "Luchtmeetnet"), (ndw_health, "NDW")):
-        try:
-            sources.append(fn())
-        except Exception as exc:
-            sources.append({"source": name, "error": str(exc)})
-    return {"sources": sources}
 
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -213,6 +220,19 @@ Promise.all(sites.map(s =>
 </script>
 </main></body></html>"""
 
+
+@app.get("/health")
+def health():
+    result = {"status": "ok"}
+    for name, fn in (("luchtmeetnet", air_health), ("ndw", ndw_health)):
+        try:
+            result[name] = fn()
+        except Exception as exc:
+            log_event(logging.ERROR, "health_check_failed", source=name, error=str(exc))
+            result["status"] = "degraded"
+            result[name] = {"last_successful_fetch": None,
+                            "bad_data_count": None, "error": str(exc)}
+    return result
 
 @app.get("/", response_class=HTMLResponse)
 def index():

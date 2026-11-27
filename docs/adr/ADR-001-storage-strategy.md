@@ -1,8 +1,5 @@
 # ADR-001: Initial Data Storage Strategy
 
-- **Date:** 2026-11-24
-- **Decider:** Yuliia Medun
-
 ## Context
 
 AirBreda ingests two live sources: hourly NO₂ readings from RIVM Luchtmeetnet station NL10240 (JSON API), and per-minute vehicle counts and speeds from four NDW sites on the A27 (gzipped DATEX II XML). Both must be queryable for model training and prediction serving, and both must remain available for retraining later.

@@ -1,7 +1,6 @@
-"""AirBreda — NDW traffic ingestion for the four A27 sites near Breda.
+"""NDW traffic ingestion for the four A27 sites near Breda.
 
-Parsing helpers reused from getTrafficReadings.py, provided by the course
-(BredaUniversityADSAI/Yr3ElectivesStudyMaterial).
+Parsing helpers reused from getTrafficReadings.py, provided by the course (BredaUniversityADSAI/Yr3ElectivesStudyMaterial).
 """
 
 # Why both the database and the bucket:
@@ -22,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import time
 from health import start_health_server
+import json
 
 import boto3
 from dotenv import load_dotenv
@@ -69,6 +69,23 @@ def save_csv(label: str, summary: dict) -> tuple[str, Path]:
     return key, path
 
 
+HEALTH_KEY = "health/ndw.json"
+
+
+def save_bad_data_total(s3, bucket: str, bad_this_run: int) -> int:
+    """Keep a running total of dropped NDW readings in the bucket, so /health can read it."""
+    try:
+        body = s3.get_object(Bucket=bucket, Key=HEALTH_KEY)["Body"].read()
+        total = json.loads(body)["bad_data_count"]
+    except s3.exceptions.NoSuchKey:
+        total = 0
+    total += bad_this_run
+    s3.put_object(Bucket=bucket, Key=HEALTH_KEY,
+                  Body=json.dumps({"bad_data_count": total}).encode(),
+                  ContentType="application/json")
+    return total
+
+
 if __name__ == "__main__":
     bucket = os.environ["S3_BUCKET"]
     s3 = boto3.client("s3")
@@ -110,6 +127,10 @@ if __name__ == "__main__":
             log_event(logging.ERROR, "site_failed", source="NDW", site=label, error=str(exc))
 
     state["bad_data_count"] = ndw_bad_data_count
+    try:
+        save_bad_data_total(s3, bucket, ndw_bad_data_count)
+    except Exception as exc:
+        log_event(logging.ERROR, "health_save_failed", source="NDW", error=str(exc))
     if ndw_bad_data_count > 10:
         log_event(logging.ERROR, "BAD_DATA_THRESHOLD_EXCEEDED", source="NDW", count=ndw_bad_data_count)
 
