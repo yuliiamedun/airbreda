@@ -1,33 +1,21 @@
 # ADR-004: Compute Strategy
 
 ## Context
-AirBreda needs two small jobs to run reliably every hour without my laptop: an air
-quality fetch (Luchtmeetnet to RDS) and a traffic fetch (NDW to S3). Each takes about a
-minute. Day 3 asked me to move them from my laptop to the cloud. The team is one person,
-and a managed service would add setup and cost for a workload this small.
+AirBreda needs two jobs to run every hour without relying on my laptop: an air-quality fetch (Luchtmeetnet to RDS) and a traffic fetch (NDW to S3). Each takes about a minute. Day 3 required moving them to the cloud. Since this is a small, one-person project, a managed service would add unnecessary setup and cost.
 
 ## Decision
-Run both jobs as Docker containers on one EC2 VM (t3.micro, Amazon Linux 2023, eu-north-1),
-started hourly by cron. Access to S3 comes from an IAM role attached to the VM, so no AWS
-keys are stored on it. The database accepts connections from the VM's security group
-rather than from a fixed IP.
+I chose to run both jobs as Docker containers on one EC2 VM (t3.micro, Amazon Linux 2023, eu-north-1), scheduled hourly with cron.
+The VM uses an IAM role to access S3, so no AWS keys are stored on it. RDS allows connections from the VM's security group instead of relying on a fixed IP.
 
 - **Why a VM and not a managed container service** (ECS or Azure Container Apps): I keep
   full control, there is almost nothing new to learn, and the cost is easy to predict.
   The price is that I look after the operating system, Docker and cron myself.
 - **Cost:** about $7.88 per month for the VM (USD, AWS list price), or about $11.53 with
   its public IPv4 address. Credits cover this in my account.
-- **Redis queue dropped.** ADR-002 describes a queue between ingestion and storage. With
-  one consumer (the database), a queue adds a broker to run and monitor and gives nothing
-  back. I would bring it back when a second consumer of the readings exists (for example
-  an ML model reading live) or when ingestion outgrows a single VM.
+- **Redis queue dropped.** I dropped it because there is only one consumer per data source. It would add another service to maintain without much benefit. I would reconsider it if a second consumer, such as a live ML model, is added.
 
 ## Consequences
-- **Operational concern I did not anticipate:** the traffic container was killed with
-  exit code 137 (out of memory). The VM has about 900 MB of RAM and the decompressed NDW
-  file needed more. It failed silently, with no error line in the log. I fixed it by
-  adding a 2 GB swap file and making it permanent in /etc/fstab. A larger instance would
-  also work, at roughly double the price.
+- **Operational concern I did not anticipate:** The traffic container was killed with exit code 137 because the decompressed NDW file needed more memory than the VM had (around 900 MB). I fixed this by adding a permanent 2 GB swap file. A larger VM would also work but cost roughly twice as much.
 - **Single point of failure:** one VM means that if it stops, nothing runs. ADR-003
   covers the recovery plan.
 - **Cron limitation:** cron starts jobs on time but does not check whether the previous
