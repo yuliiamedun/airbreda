@@ -27,10 +27,11 @@ flowchart LR
         NDW["NDW Open Data<br/>4 sites on A27 (hm 63)<br/>gzipped DATEX II XML · per minute"]
     end
 
-    subgraph ingest["EC2 VM · t3.micro · cron every hour"]
-        IA["air container<br/>ingest_air.py<br/>fetch · filter NO2 · flag · insert"]
-        IT["traffic container<br/>ingest_traffic.py<br/>decode index map · extract 4 sites"]
-        IAM["IAM role<br/>airbreda-vm-role"]
+    subgraph vm["EC2 VM · t3.micro · eu-north-1"]
+        IA["air container<br/>ingest_air.py · cron hourly"]
+        IT["traffic container<br/>ingest_traffic.py · cron hourly"]
+        DASH["dashboard container<br/>FastAPI · port 8000<br/>docker run -d --restart unless-stopped<br/>model.pkl baked into image"]
+        IAM["IAM role airbreda-vm-role<br/>S3 Put/Get/List on one bucket only"]
     end
 
     subgraph storage["Storage · AWS eu-north-1"]
@@ -38,36 +39,44 @@ flowchart LR
         S3[("S3 bucket<br/>ndw/YYYY-MM-DD/HH-site.csv")]
     end
 
-    subgraph planned["Planned — Day 4"]
-        ML["Regression model<br/>NO2 exceedance risk"]
-        API["Dashboard + JSON API<br/>GET / · GET /site/id · GET /health"]
+    subgraph offline["Laptop · offline training"]
+        TR["build_training_data.py<br/>train_model.py<br/>linear regression"]
     end
+
+    USER["Browser / API client<br/>GET / · GET /site/id · GET /health"]
 
     LMN --> IA
     NDW --> IT
     IA -->|"INSERT ... ON CONFLICT DO NOTHING<br/>port 5432 · security group rule"| RDS
     IT -->|"HTTPS upload"| S3
-    IAM -.->|"S3 access, no stored keys"| IT
-    RDS -.-> ML
-    S3 -.->|"re-parse for retraining"| ML
-    ML -.-> API
-    RDS -.-> API
+    DASH -->|"latest NO2 · flagged-row count"| RDS
+    DASH -->|"list + read latest CSV per site"| S3
+    IAM -.->|"no stored keys"| IT
+    IAM -.->|"no stored keys"| DASH
+    USER -->|"HTTP :8000 · source IP restricted"| DASH
+    RDS -.->|"read rows"| TR
+    S3 -.->|"read CSVs"| TR
+    TR -.->|"model.pkl copied into the image at build time"| DASH
 
     classDef src fill:#e8f0fe,stroke:#3b6fd4,color:#11243e
     classDef ing fill:#fff4e5,stroke:#d98324,color:#3d2607
     classDef sto fill:#e9f6ec,stroke:#2f8f4e,color:#0f2e1b
-    classDef fut fill:#f3f0f7,stroke:#8b7bb8,color:#2b2340,stroke-dasharray:4 3
+    classDef srv fill:#f3f0f7,stroke:#8b7bb8,color:#2b2340
+    classDef off fill:#fdeef0,stroke:#c0475a,color:#3b0f18
 
     class LMN,NDW src
     class IA,IT,IAM ing
     class RDS,S3 sto
-    class ML,API fut
+    class DASH,USER srv
+    class TR off
 
     style sources fill:#fafafa,stroke:#cfcfcf,color:#555
-    style ingest fill:#fafafa,stroke:#cfcfcf,color:#555
+    style vm fill:#fafafa,stroke:#cfcfcf,color:#555
     style storage fill:#fafafa,stroke:#cfcfcf,color:#555
-    style planned fill:#fafafa,stroke:#cfcfcf,color:#555,stroke-dasharray:5 4
+    style offline fill:#fafafa,stroke:#cfcfcf,color:#555,stroke-dasharray:5 4
 ```
+
+> Day 2's Redis queue is not part of this deployment. Both ingestion containers write directly to RDS and S3 (see ADR-004).
 
 ---
 
