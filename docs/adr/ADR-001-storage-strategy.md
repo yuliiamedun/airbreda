@@ -33,14 +33,14 @@ I also made the value field nullable. This allows me to store a reading even whe
 
 ### 4. Why did I reject DynamoDB?
 I considered DynamoDB but rejected it for three reasons:
-- **Query flexibility:** I would need to plan the main query patterns in advance. New queries might require additional indexes or full scans.
-- **No joins:** comparing air quality and traffic data is one of the main features of the application, and DynamoDB doesn't support joins the way relational databases do.
-- **Scalability:** DynamoDB is designed for much larger datasets. With around 130,000 rows per year, I don't need that level of scalability.
+- I would need to plan the main query patterns in advance. New queries might require additional indexes or full scans.
+- Comparing air quality and traffic data is one of the main features of the application, and DynamoDB doesn't support joins the way relational databases do.
+- DynamoDB is designed for much larger datasets. With around 130,000 rows per year, I don't need that level of scalability.
 
 ## Consequences
 
-- **Easy queries and joins.** Time-range queries and the hourly NO₂–traffic join are simple SQL, which `build_training_data.py` relies on.
-- **Safe re-runs.** The composite key with `ON CONFLICT DO NOTHING` makes ingestion idempotent, so a failed or repeated run never creates duplicates. This is also what lets the next hourly run fill gaps after an outage (see ADR-003).
+- **Easy queries and joins.** PostgreSQL handles time-range queries and hourly NO₂–traffic joins, which build_training_data.py uses.
+- **Safe re-runs.** The composite key and ON CONFLICT DO NOTHING prevent duplicates and allow the next run to fill gaps after an outage (see ADR-003).
 - **Two stores to join.** Because NO₂ lives in the database and traffic lives in S3, the training script has to read both and join them in Python rather than in one SQL query. That is acceptable at this volume, but it is the cost of splitting the data.
-- **Raw data is not preserved (known gap).** Since only parsed CSVs are uploaded, the per-lane values, vehicle types and `-1` sentinel speeds in the original XML are lost. This undermines the main reason for using object storage, and it is the decision I would be least confident defending. The fix is to upload the original `.xml.gz` next to each CSV. I see this as a gap in the implementation rather than a deliberate trade-off.
-- **Possible future change.** At the current volume, a time-series database such as TimescaleDB would add little over plain PostgreSQL. If the project grew to 50 corridors, I would reconsider this choice.
+- **Raw data is not preserved (known gap).** Only parsed CSVs are uploaded, so details like per-lane counts, vehicle types and -1 speeds are lost. I should also upload the original .xml.gz files. This is an implementation gap, not an intentional trade-off.
+- **Possible future change.** TimescaleDB would add little at the current scale. I would reconsider it if the project grew to 50 corridors for example.

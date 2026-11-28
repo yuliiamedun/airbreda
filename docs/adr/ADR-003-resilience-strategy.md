@@ -21,10 +21,10 @@ Targets: RTO 2 hours, RPO 1 hour.
 - RPO is how much recent data I can afford to lose. Since ingestion runs hourly, I could lose the run that was in progress when the system failed.
 A two-hour outage uses about 28% of the monthly downtime allowance. This means the 99% SLO can still be met after three such incidents in one month.
 
-Why I chose this tier  
+**Why I chose this tier**  
 A 99% SLO allows several hours of downtime per month, and Backup & Restore can recover the system within that time. A more advanced setup would reduce recovery to around 15 minutes, which the current SLO does not require.
 
-Rejected:  
+**Rejected:**  
 Warm Standby. This option would keep a second VM and a database replica running in another Availability Zone, reducing recovery time to around 15 minutes. I rejected it because it would almost double the cost without being necessary for the current SLO. I would consider it if the municipality required higher availability.
 
 ## Consequences
