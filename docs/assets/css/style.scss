@@ -1,0 +1,8 @@
+---
+---
+@import "{{ site.theme }}";
+
+@media (min-width: 961px) {
+  .wrapper { width: 1300px; max-width: 96%; }
+  section { width: calc(100% - 310px); }
+}
